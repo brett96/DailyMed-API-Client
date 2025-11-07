@@ -10,26 +10,33 @@ A command-line Python script that interacts with the official DailyMed v2 RESTfu
 
 ## Features
 
-- **Search drug labels (SPLs)** by drug name or NDC
-- **Retrieve specific SPL documents** by SET ID
-- **Access related SPL information:**
-  - Version History
-  - Associated NDCs
-  - Packaging Information
-- **List core DailyMed resources:**
-  - Drug Names
-  - NDCs
-  - Drug Classes
-  - Unique Ingredient Identifiers (UNIIs)
-- Simple, self-contained script with minimal dependencies
+**Search Capabilities**
+- Search drug labels (SPLs) by drug name, NDC, labeler, RxCUI, and many other advanced filters
+- Retrieve specific SPL documents by SET ID
+
+**SPL Information Access**
+- Version History
+- Associated NDCs
+- Packaging Information
+
+**Resource Management**
+- Drug Names (filter by manufacturer, name type)
+- NDCs (filter by labeler, application number)
+- Drug Classes (filter by class name, class type)
+- Unique Ingredient Identifiers (UNIIs)
+- RxNorm Concept Unique Identifiers (RxCUIs)
+
+**Technical Features**
+- Simple, self-contained script
+- Only requires `requests` library
 - Built-in error handling for network and API issues
 
 ## Installation
 
 1. **Clone or download:**
    ```bash
-   git clone <repository-url>
-   cd dailymed-project
+   git clone https://github.com/brett96/DailyMed-API-Client
+   cd DailyMed-API-Client
    ```
 
 2. **Create a virtual environment:**
@@ -50,44 +57,71 @@ A command-line Python script that interacts with the official DailyMed v2 RESTfu
 
 ## Usage
 
-View available commands:
+### Getting Help
 ```bash
+# View all commands
 python dailymed_client.py --help
+
+# Get help for specific commands
+python dailymed_client.py search-spls --help
+python dailymed_client.py get-rxcuis --help
 ```
 
-### Example Commands
+### Basic Examples
 
-#### 1. Search for drug labels
-Search for SPLs matching "aspirin" (first 5 results):
-```bash
-python dailymed_client.py search-spls --drug_name aspirin --pagesize 5
-```
+1. **Search for drug labels**
+   ```bash
+   # Search for "aspirin" (first 5 results)
+   python dailymed_client.py search-spls --drug_name aspirin --pagesize 5
+   ```
 
-#### 2. Get specific SPL document
-Retrieve full SPL document by SET ID:
-```bash
-python dailymed_client.py get-spl "a810d7c6-3b8f-4354-8e8a-02c1d21f845a"
-```
+2. **Retrieve SPL document**
+   ```bash
+   # Get full SPL document by SET ID
+   python dailymed_client.py get-spl "a810d7c6-3b8f-4354-8e8a-02c1d21f845a"
+   ```
 
-#### 3. View SPL history
-See all versions for a specific SET ID:
-```bash
-python dailymed_client.py get-spl-history "a810d7c6-3b8f-4354-8e8a-02c1d21f845a"
-```
+3. **View SPL history**
+   ```bash
+   python dailymed_client.py get-spl-history "a810d7c6-3b8f-4354-8e8a-02c1d21f845a"
+   ```
 
-#### 4. Get packaging information
-```bash
-python dailymed_client.py get-spl-packaging "a810d7c6-3b8f-4354-8e8a-02c1d21f845a"
-```
+4. **List drug names**
+   ```bash
+   # Display first 10 drug names
+   python dailymed_client.py get-drugnames --pagesize 10
+   ```
 
-#### 5. List drug names
-Display first 10 drug names:
-```bash
-python dailymed_client.py get-drugnames --pagesize 10
-```
+### Advanced Examples
 
-#### 6. List drug classes
-Display first 10 drug classes:
-```bash
-python dailymed_client.py get-drugclasses --pagesize 10
-```
+1. **Find SPLs with boxed warning**
+   ```bash
+   python dailymed_client.py search-spls --drug_name "ibuprofen" --boxed_warning True
+   ```
+
+2. **Search by manufacturer**
+   ```bash
+   python dailymed_client.py get-drugnames --manufacturer "Pfizer" --name_type "b"
+   ```
+
+3. **List drug classes**
+   ```bash
+   python dailymed_client.py get-drugclasses --class_code_type "moa" --pagesize 20
+   ```
+
+4. **Search by date**
+   ```bash
+   python dailymed_client.py search-spls --published_date "2023-10-01" --published_date_comparison "eq"
+   ```
+
+5. **Search by ingredient**
+   ```bash
+   # Find SPLs containing Acetaminophen
+   python dailymed_client.py search-spls --unii_code "362O9ITL9D"
+   ```
+
+6. **Search RxCUI codes**
+   ```bash
+   # Find RxCUI codes for "aspirin" ('Prescribable Name' only)
+   python dailymed_client.py get-rxcuis --rxstring "aspirin" --rxtty "PSN"
+   ```
