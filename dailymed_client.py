@@ -2,6 +2,7 @@ import requests
 import json
 import argparse
 import sys
+import xml.etree.ElementTree as ET
 from typing import Dict, Any, Optional, Union
 
 class DailyMedAPI:
@@ -9,7 +10,7 @@ class DailyMedAPI:
     A Python client for interacting with the DailyMed RESTful API (v2).
     
     This client provides methods to access various endpoints of the DailyMed API,
-    handling HTTP requests and JSON responses.
+    handling HTTP requests and JSON/XML responses.
     """
     
     BASE_URL = "https://dailymed.nlm.nih.gov/dailymed/services/v2"
@@ -74,6 +75,7 @@ class DailyMedAPI:
             print(f"An unexpected error occurred: {req_err}", file=sys.stderr)
             raise
         except json.JSONDecodeError:
+            # This can happen if the API returns XML on an error, etc.
             print(f"Failed to decode JSON response from {url}", file=sys.stderr)
             print(f"Response text: {response.text[:200]}...", file=sys.stderr)
             raise
@@ -138,6 +140,7 @@ class DailyMedAPI:
             The XML response string from the API.
         """
         print(f"\nGetting SPL for SET ID: {set_id}...")
+        # This endpoint returns XML, not JSON
         return self._make_request(f"spls/{set_id}.xml", params=None)
 
     def get_spl_history(self, set_id: str) -> Dict[str, Any]:
@@ -259,9 +262,131 @@ class DailyMedAPI:
         self._add_if_present(params, 'rxtty', rxtty)
         return self._make_request("rxcuis.json", params=params)
 
+    def get_ingredients_from_spl(self, set_id: str) -> Dict[str, Any]:
+        """
+        Fetches an SPL XML, parses it, and extracts active and inactive ingredients.
+        
+        Args:
+            set_id: The SET ID of the SPL document.
+
+        Returns:
+            A dictionary with 'active' and 'inactive' keys.
+        """
+        print(f"\nFetching SPL for SET ID: {set_id} to parse ingredients...")
+        
+        # 1. Fetch the raw XML string
+        try:
+            # We call get_spl_by_setid *without* its print statement,
+            # so we call the internal _make_request directly.
+            xml_string = self._make_request(f"spls/{set_id}.xml", params=None)
+            if not isinstance(xml_string, str):
+                raise ValueError("Failed to fetch XML, API did not return string.")
+        except requests.exceptions.RequestException as e:
+            print(f"Failed to fetch SPL XML: {e}", file=sys.stderr)
+            raise # Re-raise to be caught by main
+
+        # 2. Parse the XML
+        try:
+            # Remove default namespace (xmlns) to simplify findall
+            xml_string = xml_string.replace('xmlns="urn:hl7-org:v3"', '', 1)
+            root = ET.fromstring(xml_string)
+            # Register namespace for finds (even after removing default)
+            namespaces = {'hl7': 'urn:hl7-org:v3'} 
+            
+            active_ingredients = []
+            inactive_ingredients_structured = set()
+            inactive_ingredients_text = set()
+
+            # 3. Find Structured Active Ingredients (ACTIB)
+            # This looks in the "SPL product data elements section" (48780-1)
+            data_section = root.find(".//section[code[@code='48780-1']]")
+            if data_section is not None:
+                # Find ACTIB ingredients
+                for ingredient in data_section.findall(".//ingredient[@classCode='ACTIB']"):
+                    name_elem = ingredient.find(".//ingredientSubstance/name")
+                    name = name_elem.text if name_elem is not None else "Unknown"
+                    
+                    numerator_elem = ingredient.find(".//quantity/numerator")
+                    if numerator_elem is not None:
+                        value = numerator_elem.get('value', 'N/A')
+                        unit = numerator_elem.get('unit', '')
+                        strength = f"{value} {unit}".strip()
+                    else:
+                        strength = "Strength not specified"
+                    
+                    active_ingredients.append({'name': name.title(), 'strength': strength})
+
+                # 4. Find Structured Inactive Ingredients (IACT)
+                for ingredient in data_section.findall(".//ingredient[@classCode='IACT']"):
+                    name_elem = ingredient.find(".//ingredientSubstance/name")
+                    if name_elem is not None:
+                        inactive_ingredients_structured.add(name_elem.text.strip().upper())
+
+            # 5. Find Human-Readable Inactive Ingredients (Fallback)
+            # This looks in the "Inactive ingredients" section (51727-6)
+            inactive_section = root.find(".//section[code[@code='51727-6']]")
+            if inactive_section is not None:
+                para_texts = []
+                for para in inactive_section.findall(".//paragraph"):
+                    if para.text:
+                        para_texts.append(para.text.strip())
+                
+                if para_texts:
+                    full_text = " ".join(para_texts).lower()
+                    # Clean up common prefixes
+                    if full_text.startswith("inactive ingredients"):
+                        full_text = full_text[len("inactive ingredients"):].strip()
+                    full_text = full_text.strip(".: ")
+                    
+                    # Split and clean
+                    ingredients_list = full_text.split(',')
+                    for item in ingredients_list:
+                        clean_item = item.strip().upper()
+                        if clean_item:
+                            # Handle "and" in the last item
+                            if " AND " in clean_item:
+                                sub_items = clean_item.split(" AND ")
+                                for sub in sub_items:
+                                    if sub.strip():
+                                        inactive_ingredients_text.add(sub.strip())
+                            else:
+                                inactive_ingredients_text.add(clean_item)
+
+        except ET.ParseError as e:
+            print(f"Failed to parse XML for SET ID {set_id}: {e}", file=sys.stderr)
+            raise
+        
+        # 6. Combine and title-case inactive ingredients
+        combined_inactive = inactive_ingredients_structured.union(inactive_ingredients_text)
+        # Sort and Title() case for readability
+        final_inactive_list = sorted([item.title() for item in combined_inactive if item]) 
+
+        return {"active": active_ingredients, "inactive": final_inactive_list}
+
+
 def pretty_print_json(data: Dict[str, Any]):
     """Helper function to print JSON data in an indented, readable format."""
     print(json.dumps(data, indent=2))
+
+def print_ingredients(data: Dict[str, Any]):
+    """Helper function to print ingredients in a readable format."""
+    if not data.get('active') and not data.get('inactive'):
+        print("No ingredient information could be parsed.")
+        return
+    
+    print("--- Active Ingredients ---")
+    if data.get('active'):
+        for item in data['active']:
+            print(f"- {item['name']} ({item['strength']})")
+    else:
+        print("No active ingredients found or parsed.")
+    
+    print("\n--- Inactive Ingredients / Excipients ---")
+    if data.get('inactive'):
+        for item in data['inactive']:
+            print(f"- {item}")
+    else:
+        print("No inactive ingredients found or parsed.")
 
 def main():
     """
@@ -270,7 +395,7 @@ def main():
     # Main parser
     parser = argparse.ArgumentParser(
         description="A command-line client for the DailyMed v2 API.",
-        epilog="Example: python dailymed_client.py search-spls --drug_name aspirin"
+        epilog="Example: python dailymed_client.py get-ingredients \"37e939c6-064b-3548-e063-6294a90a337d\""
     )
     subparsers = parser.add_subparsers(dest="command", required=True, help="The API command to run")
 
@@ -298,8 +423,12 @@ def main():
 
 
     # --- get-spl command ---
-    get_spl_parser = subparsers.add_parser("get-spl", help="Get a specific SPL by its SET ID.")
+    get_spl_parser = subparsers.add_parser("get-spl", help="Get a specific SPL by its SET ID (raw XML).")
     get_spl_parser.add_argument("set_id", type=str, help="The SET ID of the SPL.")
+
+    # --- get-ingredients command ---
+    ingredients_parser = subparsers.add_parser("get-ingredients", help="Parse and list ingredients for an SPL.")
+    ingredients_parser.add_argument("set_id", type=str, help="The SET ID of the SPL.")
 
     # --- get-spl-history command ---
     history_parser = subparsers.add_parser("get-spl-history", help="Get the version history for an SPL.")
@@ -313,7 +442,7 @@ def main():
     pkg_parser = subparsers.add_parser("get-spl-packaging", help="Get the packaging information for an SPL.")
     pkg_parser.add_argument("set_id", type=str, help="The SET ID of the SPL.")
 
-    # --- Listing commands (drugnames, ndcs, drugclasses, uniis) ---
+    # --- Listing commands (drugnames, ndcs, drugclasses, uniis, rxcuis) ---
     
     # get-drugnames
     drugnames_parser = subparsers.add_parser("get-drugnames", help="Get a list of all drugnames.")
@@ -364,101 +493,106 @@ def main():
     api = DailyMedAPI()
     
     try:
-        result = None
-        if args.command == "search-spls":
-            result = api.search_spls(
-                page=args.page, 
-                pagesize=args.pagesize,
-                application_number=args.application_number,
-                boxed_warning=args.boxed_warning,
-                dea_schedule_code=args.dea_schedule_code,
-                doctype=args.doctype,
-                drug_class_code=args.drug_class_code,
-                drug_class_coding_system=args.drug_class_coding_system,
-                drug_name=args.drug_name,
-                name_type=args.name_type,
-                labeler=args.labeler,
-                manufacturer=args.manufacturer,
-                marketing_category_code=args.marketing_category_code,
-                ndc=args.ndc,
-                published_date=args.published_date,
-                published_date_comparison=args.published_date_comparison,
-                rxcui=args.rxcui,
-                setid=args.setid,
-                unii_code=args.unii_code
-            )
+        # Handle non-JSON commands first
+        if args.command == "get-spl":
+            xml_data = api.get_spl_by_setid(args.set_id)
+            print("API Response (XML):")
+            print(xml_data)
         
-        elif args.command == "get-spl":
-            result = api.get_spl_by_setid(args.set_id)
-            
-        elif args.command == "get-spl-history":
-            result = api.get_spl_history(args.set_id)
-            
-        elif args.command == "get-spl-ndcs":
-            result = api.get_spl_ndcs(args.set_id)
-            
-        elif args.command == "get-spl-packaging":
-            result = api.get_spl_packaging(args.set_id)
-            
-        elif args.command == "get-drugnames":
-            result = api.get_drug_names(
-                page=args.page, 
-                pagesize=args.pagesize,
-                manufacturer=args.manufacturer,
-                name_type=args.name_type
-            )
-            
-        elif args.command == "get-ndcs":
-            result = api.get_ndcs(
-                page=args.page, 
-                pagesize=args.pagesize,
-                application_number=args.application_number,
-                labeler=args.labeler,
-                marketing_category_code=args.marketing_category_code,
-                setid=args.setid
-            )
-            
-        elif args.command == "get-drugclasses":
-            result = api.get_drug_classes(
-                page=args.page, 
-                pagesize=args.pagesize,
-                drug_class_code=args.drug_class_code,
-                drug_class_coding_system=args.drug_class_coding_system,
-                class_code_type=args.class_code_type,
-                class_name=args.class_name,
-                unii_code=args.unii_code
-            )
-            
-        elif args.command == "get-uniis":
-            result = api.get_uniis(
-                page=args.page, 
-                pagesize=args.pagesize,
-                active_moiety=args.active_moiety,
-                drug_class_code=args.drug_class_code,
-                drug_class_coding_system=args.drug_class_coding_system,
-                rxcui=args.rxcui,
-                unii_code=args.unii_code
-            )
-        
-        elif args.command == "get-rxcuis":
-            result = api.get_rxcuis(
-                page=args.page,
-                pagesize=args.pagesize,
-                rxcui=args.rxcui,
-                rxstring=args.rxstring,
-                rxtty=args.rxtty
-            )
+        elif args.command == "get-ingredients":
+            ingredients_data = api.get_ingredients_from_spl(args.set_id)
+            print_ingredients(ingredients_data)
 
-        if result:
-            if args.command == "get-spl":
-                print("API Response (XML):")
-                print(result)
-            else:
+        else:
+            # Handle all other JSON-based commands
+            result = None
+            if args.command == "search-spls":
+                result = api.search_spls(
+                    page=args.page, 
+                    pagesize=args.pagesize,
+                    application_number=args.application_number,
+                    boxed_warning=args.boxed_warning,
+                    dea_schedule_code=args.dea_schedule_code,
+                    doctype=args.doctype,
+                    drug_class_code=args.drug_class_code,
+                    drug_class_coding_system=args.drug_class_coding_system,
+                    drug_name=args.drug_name,
+                    name_type=args.name_type,
+                    labeler=args.labeler,
+                    manufacturer=args.manufacturer,
+                    marketing_category_code=args.marketing_category_code,
+                    ndc=args.ndc,
+                    published_date=args.published_date,
+                    published_date_comparison=args.published_date_comparison,
+                    rxcui=args.rxcui,
+                    setid=args.setid,
+                    unii_code=args.unii_code
+                )
+            
+            elif args.command == "get-spl-history":
+                result = api.get_spl_history(args.set_id)
+                
+            elif args.command == "get-spl-ndcs":
+                result = api.get_spl_ndcs(args.set_id)
+                
+            elif args.command == "get-spl-packaging":
+                result = api.get_spl_packaging(args.set_id)
+                
+            elif args.command == "get-drugnames":
+                result = api.get_drug_names(
+                    page=args.page, 
+                    pagesize=args.pagesize,
+                    manufacturer=args.manufacturer,
+                    name_type=args.name_type
+                )
+                
+            elif args.command == "get-ndcs":
+                result = api.get_ndcs(
+                    page=args.page, 
+                    pagesize=args.pagesize,
+                    application_number=args.application_number,
+                    labeler=args.labeler,
+                    marketing_category_code=args.marketing_category_code,
+                    setid=args.setid
+                )
+                
+            elif args.command == "get-drugclasses":
+                result = api.get_drug_classes(
+                    page=args.page, 
+                    pagesize=args.pagesize,
+                    drug_class_code=args.drug_class_code,
+                    drug_class_coding_system=args.drug_class_coding_system,
+                    class_code_type=args.class_code_type,
+                    class_name=args.class_name,
+                    unii_code=args.unii_code
+                )
+                
+            elif args.command == "get-uniis":
+                result = api.get_uniis(
+                    page=args.page, 
+                    pagesize=args.pagesize,
+                    active_moiety=args.active_moiety,
+                    drug_class_code=args.drug_class_code,
+                    drug_class_coding_system=args.drug_class_coding_system,
+                    rxcui=args.rxcui,
+                    unii_code=args.unii_code
+                )
+            
+            elif args.command == "get-rxcuis":
+                result = api.get_rxcuis(
+                    page=args.page,
+                    pagesize=args.pagesize,
+                    rxcui=args.rxcui,
+                    rxstring=args.rxstring,
+                    rxtty=args.rxtty
+                )
+
+            if result:
                 print("API Response:")
                 pretty_print_json(result)
 
-    except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
-        print(f"\nAn error occurred during the API request: {e}", file=sys.stderr)
+    except (requests.exceptions.RequestException, json.JSONDecodeError, ET.ParseError) as e:
+        print(f"\nAn error occurred: {e}", file=sys.stderr)
         print("Please check your connection and the API endpoint status.", file=sys.stderr)
         sys.exit(1)
     except Exception as e:

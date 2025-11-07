@@ -78,15 +78,21 @@ python dailymed_client.py get-rxcuis --help
 2. **Retrieve SPL document**
    ```bash
    # Get full SPL document by SET ID
-   python dailymed_client.py get-spl "a810d7c6-3b8f-4354-8e8a-02c1d21f845a"
+   python dailymed_client.py get-spl "37e939c6-064b-3548-e063-6294a90a337d"
    ```
 
-3. **View SPL history**
+3. **Get Ingredients For Drug (WORK IN PROGRESS)**
+   ```bash
+   # This fetches the SPL XML, parses it, and shows a clean list of ingredients. (Uses the Tylenol example SET ID).
+   python dailymed_client.py get-ingredients "37e939c6-064b-3548-e063-6294a90a337d"
+   ```
+   
+4. **View SPL history**
    ```bash
    python dailymed_client.py get-spl-history "a810d7c6-3b8f-4354-8e8a-02c1d21f845a"
    ```
 
-4. **List drug names**
+5. **List drug names**
    ```bash
    # Display first 10 drug names
    python dailymed_client.py get-drugnames --pagesize 10
