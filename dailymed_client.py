@@ -290,16 +290,25 @@ class DailyMedAPI:
             # Remove default namespace (xmlns) to simplify findall
             xml_string = xml_string.replace('xmlns="urn:hl7-org:v3"', '', 1)
             root = ET.fromstring(xml_string)
-            # Register namespace for finds (even after removing default)
-            namespaces = {'hl7': 'urn:hl7-org:v3'} 
             
             active_ingredients = []
             inactive_ingredients_structured = set()
             inactive_ingredients_text = set()
+            data_section = None
+            inactive_section = None
 
-            # 3. Find Structured Active Ingredients (ACTIB)
-            # This looks in the "SPL product data elements section" (48780-1)
-            data_section = root.find(".//section[code[@code='48780-1']]")
+            # 3. Find relevant sections
+            # We loop manually to avoid 'invalid predicate' error
+            for section in root.findall(".//section"):
+                code_elem = section.find("./code")
+                if code_elem is not None:
+                    code = code_elem.get("code")
+                    if code == "48780-1": # "SPL product data elements section"
+                        data_section = section
+                    elif code == "51727-6": # "INACTIVE INGREDIENT SECTION"
+                        inactive_section = section
+            
+            # 4. Find Structured Active Ingredients (ACTIB)
             if data_section is not None:
                 # Find ACTIB ingredients
                 for ingredient in data_section.findall(".//ingredient[@classCode='ACTIB']"):
@@ -316,17 +325,16 @@ class DailyMedAPI:
                     
                     active_ingredients.append({'name': name.title(), 'strength': strength})
 
-                # 4. Find Structured Inactive Ingredients (IACT)
+                # 5. Find Structured Inactive Ingredients (IACT)
                 for ingredient in data_section.findall(".//ingredient[@classCode='IACT']"):
                     name_elem = ingredient.find(".//ingredientSubstance/name")
                     if name_elem is not None:
                         inactive_ingredients_structured.add(name_elem.text.strip().upper())
 
-            # 5. Find Human-Readable Inactive Ingredients (Fallback)
-            # This looks in the "Inactive ingredients" section (51727-6)
-            inactive_section = root.find(".//section[code[@code='51727-6']]")
+            # 6. Find Human-Readable Inactive Ingredients (Fallback)
             if inactive_section is not None:
                 para_texts = []
+                # Find text inside all paragraphs
                 for para in inactive_section.findall(".//paragraph"):
                     if para.text:
                         para_texts.append(para.text.strip())
@@ -356,7 +364,7 @@ class DailyMedAPI:
             print(f"Failed to parse XML for SET ID {set_id}: {e}", file=sys.stderr)
             raise
         
-        # 6. Combine and title-case inactive ingredients
+        # 7. Combine and title-case inactive ingredients
         combined_inactive = inactive_ingredients_structured.union(inactive_ingredients_text)
         # Sort and Title() case for readability
         final_inactive_list = sorted([item.title() for item in combined_inactive if item]) 
@@ -558,7 +566,7 @@ def main():
                 
             elif args.command == "get-drugclasses":
                 result = api.get_drug_classes(
-                    page=args.page, 
+                    page=copy.page, 
                     pagesize=args.pagesize,
                     drug_class_code=args.drug_class_code,
                     drug_class_coding_system=args.drug_class_coding_system,
