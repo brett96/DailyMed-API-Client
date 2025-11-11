@@ -70,6 +70,8 @@ A command-line Python script that interacts with the official DailyMed v2 RESTfu
    pip install -r requirements.txt
    ```
 
+
+
 ## Usage
 
 ### Getting Help
@@ -81,6 +83,8 @@ python dailymed_client.py --help
 python dailymed_client.py search --help
 python dailymed_client.py search-spls --help
 ```
+
+
 
 ### Basic Examples
 
@@ -112,6 +116,8 @@ python dailymed_client.py search-spls --help
    # Display first 10 drug names
    python dailymed_client.py get-drugnames --pagesize 10
    ```
+
+
 
 ### Advanced Examples
 
