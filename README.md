@@ -1,6 +1,6 @@
 # DailyMed API Python Client
 
-Lightweight command-line client for the DailyMed v2 REST API — search SPLs, fetch raw SPL XML, parse ingredients, and list related resources.
+A command-line Python script that interacts with the official DailyMed v2 RESTful API to search drug labels, retrieve SPL details, and list various drug-related resources.
 
 ---
 
@@ -12,141 +12,157 @@ Lightweight command-line client for the DailyMed v2 REST API — search SPLs, fe
 - [Usage](#usage)
   - [Help](#getting-help)
   - [Basic Examples](#basic-examples)
-  - [Advanced / Custom Search](#advanced--custom-search)
-- [Notes](#notes)
-
----
-
-## Features
-
-- Advanced multi-step search with post-filtering (route, include/exclude active/inactive ingredients).
-- Direct API searches (search-spls) with many filters (drug name, NDC, boxed warning, etc.).
-- Parse SPL ingredients into readable active / inactive lists (get-ingredients).
-- Retrieve raw SPL XML (get-spl) and related info:
-  - Version history (get-spl-history)
-  - Associated NDCs (get-spl-ndcs)
-  - Packaging info (get-spl-packaging)
-- List/filter core resources:
-  - Drug names (get-drugnames)
-  - NDCs (get-ndcs)
-  - Drug classes (get-drugclasses)
-  - UNIIs (get-uniis)
-  - RxCUIs (get-rxcuis)
-- Single-file script, only requires `requests`.
-- Error handling for common network/API issues.
+  - [Custom Search & Advanced Examples](#advanced-examples)
 
 ---
 
 ## Requirements
 
-- Python 3.10+
-- requests (see requirements.txt)
-- Windows / macOS / Linux
+- Python 3.10+ (compatible with Python 3.13.5)
+- Windows, macOS, or Linux
+- `requests` library
 
----
+## Features
+
+**Advanced Search**
+- Basic & Advanced multi-step search with post-filtering (route, include/exclude active/inactive ingredients)
+- Retrieve specific SPL documents by SET ID
+
+**SPL Information Access**
+- Version History
+- Associated NDCs
+- Packaging Information
+
+**Resource Management**
+- Drug Names (filter by manufacturer, name type)
+- NDCs (filter by labeler, application number)
+- Drug Classes (filter by class name, class type)
+- Unique Ingredient Identifiers (UNIIs)
+- RxNorm Concept Unique Identifiers (RxCUIs)
+
+**Technical Features**
+- Simple, self-contained script
+- Only requires `requests` library
+- Built-in error handling for network and API issues
+
 
 ## Installation
 
-```bash
-git clone https://github.com/brett96/DailyMed-API-Client
-cd DailyMed-API-Client
-```
+1. **Clone or download:**
+   ```bash
+   git clone https://github.com/brett96/DailyMed-API-Client
+   cd DailyMed-API-Client
+   ```
 
-Create and activate a virtualenv:
+2. **Create a virtual environment:**
+   ```bash
+   # Windows
+   python -m venv venv
+   .\venv\Scripts\activate
 
-```bash
-# Windows
-python -m venv venv
-.\venv\Scripts\activate
+   # macOS/Linux
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
 
-# macOS / Linux
-python3 -m venv venv
-source venv/bin/activate
-```
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
----
+3. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 ## Usage
 
-### Getting help
-
+### Getting Help
 ```bash
+# View all commands
 python dailymed_client.py --help
-python dailymed_client.py search-spls --help
+
+# Get help for specific commands
 python dailymed_client.py search --help
+python dailymed_client.py search-spls --help
 ```
 
 ### Basic Examples
 
-Search SPLs (first 5):
+#### 1. **Search for drug labels**
+   ```bash
+   # Search for "aspirin" (first 5 results)
+   python dailymed_client.py search-spls --drug_name aspirin --pagesize 5
+   ```
 
-```bash
-python dailymed_client.py search-spls --drug_name aspirin --pagesize 5
-```
+#### 2. **Retrieve SPL document**
+   ```bash
+   # Get full SPL document by SET ID
+   python dailymed_client.py get-spl "37e939c6-064b-3548-e063-6294a90a337d"
+   ```
 
-Get raw SPL XML by SET ID:
+#### 3. **Get Ingredients For Drug (WORK IN PROGRESS)**
+   ```bash
+   # This fetches the SPL XML, parses it, and shows a clean list of ingredients. (Uses the Tylenol example SET ID).
+   python dailymed_client.py get-ingredients "37e939c6-064b-3548-e063-6294a90a337d"
+   ```
+   
+#### 4. **View SPL history**
+   ```bash
+   python dailymed_client.py get-spl-history "a810d7c6-3b8f-4354-8e8a-02c1d21f845a"
+   ```
 
-```bash
-python dailymed_client.py get-spl "37e939c6-064b-3548-e063-6294a90a337d"
-```
+#### 5. **List drug names**
+   ```bash
+   # Display first 10 drug names
+   python dailymed_client.py get-drugnames --pagesize 10
+   ```
 
-Get parsed ingredients (WIP):
+### Advanced Examples
 
-```bash
-python dailymed_client.py get-ingredients "37e939c6-064b-3548-e063-6294a90a337d"
-```
+#### 1. **Include / exclude active ingredients (processes first 20 results)**
+   ```bash
+   python dailymed_client.py search --drug_name "tylenol" --include-active "Guaifenesin" --exclude-active "Dextromethorphan" --pagesize 20
+   ```
+   
+#### 2. **Route filter (processes first 10 results)**
+   ```bash
+   python dailymed_client.py search --drug_name "ibuprofen" --route "ORAL" --pagesize 10
+   ```
 
-View SPL version history:
+#### 3. **Find products with a specific inactive ingredient**
+   ```bash
+   python dailymed_client.py search --drug_name "acetaminophen" --include-inactive "aspartame" --pagesize 15
+   ```
 
-```bash
-python dailymed_client.py get-spl-history "a810d7c6-3b8f-4354-8e8a-02c1d21f845a"
-```
+#### 4. **Complex filters (multiple excludes)**
+   ```bash
+   python dailymed_client.py search --drug_name "loratadine" --route "ORAL" --exclude-inactive "sucralose" "aspartame"
+   ```
 
-List drug names (first 10):
+#### 5. **Find SPLs with boxed warning**
+   ```bash
+   python dailymed_client.py search-spls --drug_name "ibuprofen" --boxed_warning True
+   ```
 
-```bash
-python dailymed_client.py get-drugnames --pagesize 10
-```
+#### 6. **Search by manufacturer**
+   ```bash
+   python dailymed_client.py get-drugnames --manufacturer "Pfizer" --name_type "b"
+   ```
 
----
+#### 7. **List drug classes**
+   ```bash
+   python dailymed_client.py get-drugclasses --class_code_type "moa" --pagesize 20
+   ```
 
-## Advanced / Custom Search
+#### 8. **Search by date**
+   ```bash
+   python dailymed_client.py search-spls --published_date "2023-10-01" --published_date_comparison "eq"
+   ```
 
-The `search` command performs an initial API search (by drug name, etc.), then fetches each SPL to apply post-filters. This is multi-step and may be slower.
+#### 9. **Search by ingredient**
+   ```bash
+   # Find SPLs containing Acetaminophen
+   python dailymed_client.py search-spls --unii_code "362O9ITL9D"
+   ```
 
-Examples:
-
-1) Route filter (processes first 10 results):
-
-```bash
-python dailymed_client.py search --drug_name "ibuprofen" --route "ORAL" --pagesize 10
-```
-
-2) Include / exclude active ingredients (processes first 20 results):
-
-```bash
-python dailymed_client.py search --drug_name "tylenol" \
-  --include-active "Guaifenesin" \
-  --exclude-active "Dextromethorphan" \
-  --pagesize 20
-```
-
-3) Find products with a specific inactive ingredient:
-
-```bash
-python dailymed_client.py search --drug_name "acetaminophen" --include-inactive "aspartame" --pagesize 15
-```
-
-4) Complex filters (multiple excludes):
-
-```bash
-python dailymed_client.py search --drug_name "loratadine" --route "ORAL" --exclude-inactive "sucralose" "aspartame"
-```
-
----
+#### 10. **Search RxCUI codes**
+   ```bash
+   # Find RxCUI codes for "aspirin" ('Prescribable Name' only)
+   python dailymed_client.py get-rxcuis --rxstring "aspirin" --rxtty "PSN"
+   ```
