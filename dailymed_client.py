@@ -3,7 +3,7 @@ import json
 import argparse
 import sys
 import xml.etree.ElementTree as ET
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, List, Set, Generator
 
 class DailyMedAPI:
     """
@@ -42,7 +42,11 @@ class DailyMedAPI:
         if params:
             for key, value in params.items():
                 if value is not None:
-                    clean_params[key] = value
+                    # Special handling for bool
+                    if isinstance(value, bool):
+                         clean_params[key] = str(value).lower()
+                    else:
+                        clean_params[key] = value
         
         url = f"{self.BASE_URL}/{endpoint}"
         
@@ -109,7 +113,11 @@ class DailyMedAPI:
         
         params = {"page": page, "pagesize": pagesize}
         self._add_if_present(params, 'application_number', application_number)
-        self._add_if_present(params, 'boxed_warning', boxed_warning)
+        
+        # This is tricky in argparse. Store it as a string.
+        if boxed_warning is not None:
+             self._add_if_present(params, 'boxed_warning', str(boxed_warning).lower())
+        
         self._add_if_present(params, 'dea_schedule_code', dea_schedule_code)
         self._add_if_present(params, 'doctype', doctype)
         self._add_if_present(params, 'drug_class_code', drug_class_code)
@@ -125,7 +133,7 @@ class DailyMedAPI:
         self._add_if_present(params, 'rxcui', rxcui)
         self._add_if_present(params, 'setid', setid)
         self._add_if_present(params, 'unii_code', unii_code)
-
+        
         return self._make_request("spls.json", params=params)
 
     def get_spl_by_setid(self, set_id: str) -> str:
@@ -262,43 +270,53 @@ class DailyMedAPI:
         self._add_if_present(params, 'rxtty', rxtty)
         return self._make_request("rxcuis.json", params=params)
 
-    def get_ingredients_from_spl(self, set_id: str) -> Dict[str, Any]:
+    def _parse_spl_xml(self, xml_string: str) -> Optional[Dict[str, Any]]:
         """
-        Fetches an SPL XML, parses it, and extracts active and inactive ingredients.
-        
+        Internal helper to parse a raw SPL XML string into a structured dictionary.
+
         Args:
-            set_id: The SET ID of the SPL document.
+            xml_string: The raw XML content of an SPL.
 
         Returns:
-            A dictionary with 'active' and 'inactive' keys.
+            A dictionary with parsed data, or None if parsing fails.
         """
-        print(f"\nFetching SPL for SET ID: {set_id} to parse ingredients...")
-        
-        # 1. Fetch the raw XML string
-        try:
-            # We call get_spl_by_setid *without* its print statement,
-            # so we call the internal _make_request directly.
-            xml_string = self._make_request(f"spls/{set_id}.xml", params=None)
-            if not isinstance(xml_string, str):
-                raise ValueError("Failed to fetch XML, API did not return string.")
-        except requests.exceptions.RequestException as e:
-            print(f"Failed to fetch SPL XML: {e}", file=sys.stderr)
-            raise # Re-raise to be caught by main
-
-        # 2. Parse the XML
         try:
             # Remove default namespace (xmlns) to simplify findall
             xml_string = xml_string.replace('xmlns="urn:hl7-org:v3"', '', 1)
             root = ET.fromstring(xml_string)
             
+            parsed_data = {
+                "set_id": None,
+                "title": "N/A",
+                "form_code_display": "N/A",
+                "route_code_display": "N/A",
+                "active": [],
+                "inactive": []
+            }
+
+            # Find Set ID
+            set_id_elem = root.find(".//setId")
+            if set_id_elem is not None:
+                parsed_data["set_id"] = set_id_elem.get("root")
+
+            # Find Title
+            title_elem = root.find(".//title")
+            if title_elem is not None:
+                # Remove extra whitespace/newlines from title
+                title_text = " ".join(str(title_elem.text).split()).strip()
+                if not title_text:
+                    # Fallback for complex titles with <sup> tags etc.
+                    title_text = " ".join("".join(title_elem.itertext()).split()).strip()
+                parsed_data["title"] = title_text
+
+
             active_ingredients = []
             inactive_ingredients_structured = set()
             inactive_ingredients_text = set()
             data_section = None
             inactive_section = None
 
-            # 3. Find relevant sections
-            # We loop manually to avoid 'invalid predicate' error
+            # Find relevant sections
             for section in root.findall(".//section"):
                 code_elem = section.find("./code")
                 if code_elem is not None:
@@ -308,9 +326,18 @@ class DailyMedAPI:
                     elif code == "51727-6": # "INACTIVE INGREDIENT SECTION"
                         inactive_section = section
             
-            # 4. Find Structured Active Ingredients (ACTIB)
             if data_section is not None:
-                # Find ACTIB ingredients
+                # Find Form Code
+                form_code_elem = data_section.find(".//manufacturedProduct/formCode")
+                if form_code_elem is not None:
+                    parsed_data["form_code_display"] = form_code_elem.get("displayName", "N/A")
+
+                # Find Route Code
+                route_code_elem = data_section.find(".//substanceAdministration/routeCode")
+                if route_code_elem is not None:
+                    parsed_data["route_code_display"] = route_code_elem.get("displayName", "N/A")
+                
+                # Find Structured Active Ingredients (ACTIB)
                 for ingredient in data_section.findall(".//ingredient[@classCode='ACTIB']"):
                     name_elem = ingredient.find(".//ingredientSubstance/name")
                     name = name_elem.text if name_elem is not None else "Unknown"
@@ -325,33 +352,31 @@ class DailyMedAPI:
                     
                     active_ingredients.append({'name': name.title(), 'strength': strength})
 
-                # 5. Find Structured Inactive Ingredients (IACT)
+                # Find Structured Inactive Ingredients (IACT)
                 for ingredient in data_section.findall(".//ingredient[@classCode='IACT']"):
                     name_elem = ingredient.find(".//ingredientSubstance/name")
                     if name_elem is not None:
                         inactive_ingredients_structured.add(name_elem.text.strip().upper())
-
-            # 6. Find Human-Readable Inactive Ingredients (Fallback)
+            
+            # Find Human-Readable Inactive Ingredients (Fallback)
             if inactive_section is not None:
                 para_texts = []
-                # Find text inside all paragraphs
+                # Find text inside all paragraphs and their children (like <content>)
                 for para in inactive_section.findall(".//paragraph"):
-                    if para.text:
-                        para_texts.append(para.text.strip())
+                    text = "".join(para.itertext()).strip()
+                    if text:
+                        para_texts.append(text)
                 
                 if para_texts:
                     full_text = " ".join(para_texts).lower()
-                    # Clean up common prefixes
                     if full_text.startswith("inactive ingredients"):
                         full_text = full_text[len("inactive ingredients"):].strip()
                     full_text = full_text.strip(".: ")
                     
-                    # Split and clean
                     ingredients_list = full_text.split(',')
                     for item in ingredients_list:
                         clean_item = item.strip().upper()
                         if clean_item:
-                            # Handle "and" in the last item
                             if " AND " in clean_item:
                                 sub_items = clean_item.split(" AND ")
                                 for sub in sub_items:
@@ -360,16 +385,147 @@ class DailyMedAPI:
                             else:
                                 inactive_ingredients_text.add(clean_item)
 
-        except ET.ParseError as e:
-            print(f"Failed to parse XML for SET ID {set_id}: {e}", file=sys.stderr)
-            raise
-        
-        # 7. Combine and title-case inactive ingredients
-        combined_inactive = inactive_ingredients_structured.union(inactive_ingredients_text)
-        # Sort and Title() case for readability
-        final_inactive_list = sorted([item.title() for item in combined_inactive if item]) 
+            # Combine and title-case ingredients
+            parsed_data["active"] = active_ingredients
+            combined_inactive = inactive_ingredients_structured.union(inactive_ingredients_text)
+            parsed_data["inactive"] = sorted([item.title() for item in combined_inactive if item]) 
 
-        return {"active": active_ingredients, "inactive": final_inactive_list}
+            return parsed_data
+
+        except ET.ParseError as e:
+            print(f"Failed to parse XML: {e}", file=sys.stderr)
+            return None
+        except Exception as e:
+            print(f"An unexpected error occurred during XML parsing: {e}", file=sys.stderr)
+            return None
+
+
+    def get_ingredients_from_spl(self, set_id: str) -> Dict[str, Any]:
+        """
+        Fetches an SPL XML, parses it, and extracts active and inactive ingredients.
+        
+        Args:
+            set_id: The SET ID of the SPL document.
+
+        Returns:
+            A dictionary with 'active' and 'inactive' keys.
+        """
+        print(f"\nFetching SPL for SET ID: {set_id} to parse ingredients...")
+        
+        try:
+            xml_string = self._make_request(f"spls/{set_id}.xml", params=None)
+            if not isinstance(xml_string, str):
+                raise ValueError("Failed to fetch XML, API did not return string.")
+        except requests.exceptions.RequestException as e:
+            print(f"Failed to fetch SPL XML: {e}", file=sys.stderr)
+            raise 
+
+        parsed_data = self._parse_spl_xml(xml_string)
+        
+        if parsed_data:
+            # Return only the ingredient parts for this function
+            return {"active": parsed_data.get("active", []), "inactive": parsed_data.get("inactive", [])}
+        else:
+            raise ValueError(f"Failed to parse XML for SET ID {set_id}")
+
+    def search_with_filters(
+        self,
+        drug_name: str,
+        pagesize: int = 10,
+        route: Optional[str] = None,
+        include_active: Optional[List[str]] = None,
+        exclude_active: Optional[List[str]] = None,
+        include_inactive: Optional[List[str]] = None,
+        exclude_inactive: Optional[List[str]] = None
+    ) -> Generator[Dict[str, Any], None, None]:
+        """
+        Performs a basic search, then applies advanced filters by fetching each SPL.
+        This is a multi-step process and may be slow.
+        """
+        print(f"Starting advanced search for '{drug_name}' (processing up to {pagesize} results)...")
+        print("This may take a moment as each result is fetched and parsed.")
+
+        # 1. Initial search
+        try:
+            initial_results = self.search_spls(drug_name=drug_name, pagesize=pagesize)
+        except requests.exceptions.RequestException as e:
+            print(f"Initial API search failed: {e}", file=sys.stderr)
+            return
+
+        data_results = initial_results.get("data")
+        
+        if not data_results:
+            print("No initial results found.")
+            return
+
+        # 2. Prepare filter keywords (convert to lowercase sets for comparison)
+        route_filter = route.lower() if route else None
+        inc_act = {k.lower() for k in include_active} if include_active else set()
+        exc_act = {k.lower() for k in exclude_active} if exclude_active else set()
+        inc_inact = {k.lower() for k in include_inactive} if include_inactive else set()
+        exc_inact = {k.lower() for k in exclude_inactive} if exclude_inactive else set()
+
+        # 3. Iterate, fetch, parse, and filter
+        count = 0
+        for i, item in enumerate(data_results): # Use data_results here
+            
+            # --- THE FIX ---
+            # The API returns "setid", not "set_id" in the search-spls response
+            set_id = item.get("setid") 
+            # --- END FIX ---
+
+            if not set_id:
+                # This should no longer happen, but good to keep
+                print(f"  ... skipping result {i+1}/{len(data_results)} (No SET ID)")
+                continue
+            
+            try:
+                xml_string = self._make_request(f"spls/{set_id}.xml", params=None)
+                if not isinstance(xml_string, str):
+                    continue
+                
+                parsed_data = self._parse_spl_xml(xml_string)
+                if not parsed_data:
+                    continue
+                
+                # --- Filtering Logic ---
+                
+                # Check Route
+                parsed_route = parsed_data["route_code_display"].lower()
+                if route_filter and route_filter not in parsed_route:
+                    continue
+
+                # Prepare lowercase ingredient lists from parsed data
+                active_list_lower = {ing["name"].lower() for ing in parsed_data["active"]}
+                inactive_list_lower = {ing.lower() for ing in parsed_data["inactive"]}
+                
+                # Check Include Active
+                # We must match ALL keywords in the include list
+                if inc_act and not all(any(filt in active for active in active_list_lower) for filt in inc_act):
+                    continue
+                
+                # Check Exclude Active
+                # We fail if ANY excluded keyword is found
+                if exc_act and any(any(filt in active for active in active_list_lower) for filt in exc_act):
+                    continue
+
+                # Check Include Inactive
+                if inc_inact and not all(any(filt in inactive for inactive in inactive_list_lower) for filt in inc_inact):
+                    continue
+
+                # Check Exclude Inactive
+                if exc_inact and any(any(filt in inactive for inactive in inactive_list_lower) for filt in exc_inact):
+                    continue
+                
+                # --- If it passes all filters, yield it ---
+                count += 1
+                yield parsed_data
+
+            except Exception as e:
+                print(f"    [ERROR] Failed to process SET ID {set_id}: {e}", file=sys.stderr)
+                continue
+        
+        print(f"\nAdvanced search complete. Found {count} matching items.")
 
 
 def pretty_print_json(data: Dict[str, Any]):
@@ -396,6 +552,18 @@ def print_ingredients(data: Dict[str, Any]):
     else:
         print("No inactive ingredients found or parsed.")
 
+def print_search_result(data: Dict[str, Any]):
+    """Helper function to print the detailed search result."""
+    print("\n==================================================")
+    print(f"Drug: {data.get('title', 'N/A')}")
+    print(f"Form: {data.get('form_code_display', 'N/A')}")
+    print(f"Route: {data.get('route_code_display', 'N/A')}")
+    print(f"SET ID: {data.get('set_id', 'N/A')}")
+    
+    # Reuse the ingredient printer
+    print_ingredients(data)
+    print("==================================================")
+
 def main():
     """
     Main function to run the command-line interface for the DailyMed API client.
@@ -407,12 +575,25 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", required=True, help="The API command to run")
 
+    # --- NEW: search command ---
+    search_parser = subparsers.add_parser("search", help="Advanced search with post-filtering (slow).")
+    search_parser.add_argument("--drug_name", type=str, required=True, help="Base drug name to search for (e.g., 'tylenol').")
+    search_parser.add_argument("--pagesize", type=int, default=10, help="Number of initial results to fetch and filter (max 100).")
+    search_parser.add_argument("--route", type=str, help="Filter by route of administration (e.g., 'ORAL').")
+    search_parser.add_argument("--include-active", nargs='+', help="List of keywords that MUST be in active ingredients.")
+    search_parser.add_argument("--exclude-active", nargs='+', help="List of keywords that MUST NOT be in active ingredients.")
+    search_parser.add_argument("--include-inactive", nargs='+', help="List of keywords that MUST be in inactive ingredients.")
+    search_parser.add_argument("--exclude-inactive", nargs='+', help="List of keywords that MUST NOT be in inactive ingredients.")
+
     # --- search-spls command ---
     spl_parser = subparsers.add_parser("search-spls", help="Search for SPLs (drug labels).")
     spl_parser.add_argument("--page", type=int, default=1, help="Page number of results.")
     spl_parser.add_argument("--pagesize", type=int, default=5, help="Results per page (max 100).")
     spl_parser.add_argument("--application_number", type=str, help="Filter by NDA number.")
-    spl_parser.add_argument("--boxed_warning", type=bool, help="Filter by boxed warning (True/False).")
+    
+    # Correct way to handle boolean flags in argparse
+    spl_parser.add_argument("--boxed_warning", action=argparse.BooleanOptionalAction, help="Filter by boxed warning (use --boxed_warning or --no-boxed_warning).")
+    
     spl_parser.add_argument("--dea_schedule_code", type=str, help="Filter by DEA schedule (e.g., 'C48676' for CIII).")
     spl_parser.add_argument("--doctype", type=str, help="Filter by document type (e.g., 'C78841' for HUMAN_PRESCRIPTION_DRUG_LABEL).")
     spl_parser.add_argument("--drug_class_code", type=str, help="Filter by drug class code.")
@@ -501,7 +682,7 @@ def main():
     api = DailyMedAPI()
     
     try:
-        # Handle non-JSON commands first
+        # Handle non-JSON, non-looping commands first
         if args.command == "get-spl":
             xml_data = api.get_spl_by_setid(args.set_id)
             print("API Response (XML):")
@@ -510,6 +691,24 @@ def main():
         elif args.command == "get-ingredients":
             ingredients_data = api.get_ingredients_from_spl(args.set_id)
             print_ingredients(ingredients_data)
+
+        # Handle new 'search' command (looping)
+        elif args.command == "search":
+            results_found = 0
+            for result in api.search_with_filters(
+                drug_name=args.drug_name,
+                pagesize=args.pagesize,
+                route=args.route,
+                include_active=args.include_active,
+                exclude_active=args.exclude_active,
+                include_inactive=args.include_inactive,
+                exclude_inactive=args.exclude_inactive
+            ):
+                results_found += 1
+                print_search_result(result)
+            
+            if results_found == 0:
+                print("\nNo results matched all of your advanced filters.")
 
         else:
             # Handle all other JSON-based commands
@@ -566,7 +765,7 @@ def main():
                 
             elif args.command == "get-drugclasses":
                 result = api.get_drug_classes(
-                    page=copy.page, 
+                    page=args.page, # Corrected from copy.page
                     pagesize=args.pagesize,
                     drug_class_code=args.drug_class_code,
                     drug_class_coding_system=args.drug_class_coding_system,
