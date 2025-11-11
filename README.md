@@ -161,7 +161,7 @@ python dailymed_client.py search-spls --help
    python dailymed_client.py search-spls --unii_code "362O9ITL9D"
    ```
 
-#### 10. **Search RxCUI codes**
+10. **Search RxCUI codes**
    ```bash
    # Find RxCUI codes for "aspirin" ('Prescribable Name' only)
    python dailymed_client.py get-rxcuis --rxstring "aspirin" --rxtty "PSN"
