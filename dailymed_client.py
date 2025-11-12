@@ -433,6 +433,7 @@ class DailyMedAPI:
         drug_name: str,
         pagesize: int = 10,
         route: Optional[str] = None,
+        only_active: Optional[List[str]] = None,
         include_active: Optional[List[str]] = None,
         exclude_active: Optional[List[str]] = None,
         include_inactive: Optional[List[str]] = None,
@@ -460,6 +461,7 @@ class DailyMedAPI:
 
         # 2. Prepare filter keywords (convert to lowercase sets for comparison)
         route_filter = route.lower() if route else None
+        only_act_filts = {k.lower() for k in only_active} if only_active else set()
         inc_act = {k.lower() for k in include_active} if include_active else set()
         exc_act = {k.lower() for k in exclude_active} if exclude_active else set()
         inc_inact = {k.lower() for k in include_inactive} if include_inactive else set()
@@ -469,14 +471,12 @@ class DailyMedAPI:
         count = 0
         for i, item in enumerate(data_results): # Use data_results here
             
-            # --- THE FIX ---
             # The API returns "setid", not "set_id" in the search-spls response
             set_id = item.get("setid") 
-            # --- END FIX ---
-
+            
             if not set_id:
                 # This should no longer happen, but good to keep
-                print(f"  ... skipping result {i+1}/{len(data_results)} (No SET ID)")
+                # print(f"  ... skipping result {i+1}/{len(data_results)} (No SET ID)")
                 continue
             
             try:
@@ -517,6 +517,11 @@ class DailyMedAPI:
                 if exc_inact and any(any(filt in inactive for inactive in inactive_list_lower) for filt in exc_inact):
                     continue
                 
+                # Check Only Active (NEW)
+                # Ensures ALL active ingredients found match at least ONE of the provided keywords
+                if only_act_filts and not all(any(filt in ing for filt in only_act_filts) for ing in active_list_lower):
+                    continue # Skip, as it contains an "un-approved" active ingredient
+
                 # --- If it passes all filters, yield it ---
                 count += 1
                 yield parsed_data
@@ -580,6 +585,7 @@ def main():
     search_parser.add_argument("--drug_name", type=str, required=True, help="Base drug name to search for (e.g., 'tylenol').")
     search_parser.add_argument("--pagesize", type=int, default=10, help="Number of initial results to fetch and filter (max 100).")
     search_parser.add_argument("--route", type=str, help="Filter by route of administration (e.g., 'ORAL').")
+    search_parser.add_argument("--only-active", nargs='+', help="Ensure *only* active ingredients matching these keywords are present.")
     search_parser.add_argument("--include-active", nargs='+', help="List of keywords that MUST be in active ingredients.")
     search_parser.add_argument("--exclude-active", nargs='+', help="List of keywords that MUST NOT be in active ingredients.")
     search_parser.add_argument("--include-inactive", nargs='+', help="List of keywords that MUST be in inactive ingredients.")
@@ -699,6 +705,7 @@ def main():
                 drug_name=args.drug_name,
                 pagesize=args.pagesize,
                 route=args.route,
+                only_active=args.only_active,
                 include_active=args.include_active,
                 exclude_active=args.exclude_active,
                 include_inactive=args.include_inactive,
