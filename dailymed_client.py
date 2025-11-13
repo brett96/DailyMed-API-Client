@@ -87,7 +87,7 @@ class DailyMedAPI:
     def search_spls(
         self, 
         page: int = 1, 
-        pagesize: int = 10,
+        pagesize: int = 25,
         application_number: Optional[str] = None,
         boxed_warning: Optional[bool] = None,
         dea_schedule_code: Optional[str] = None,
@@ -431,7 +431,7 @@ class DailyMedAPI:
     def search_with_filters(
         self,
         drug_name: str,
-        pagesize: int = 10,
+        pagesize: int = 25,
         route: Optional[str] = None,
         only_active: Optional[List[str]] = None,
         include_active: Optional[List[str]] = None,
@@ -583,7 +583,7 @@ def main():
     # --- NEW: search command ---
     search_parser = subparsers.add_parser("search", help="Advanced search with post-filtering (slow).")
     search_parser.add_argument("--drug_name", type=str, required=True, help="Base drug name to search for (e.g., 'tylenol').")
-    search_parser.add_argument("--pagesize", type=int, default=10, help="Number of initial results to fetch and filter (max 100).")
+    search_parser.add_argument("--pagesize", type=int, default=25, help="Number of initial results to fetch and filter (max 100).")
     search_parser.add_argument("--route", type=str, help="Filter by route of administration (e.g., 'ORAL').")
     search_parser.add_argument("--only-active", nargs='+', help="Ensure *only* active ingredients matching these keywords are present.")
     search_parser.add_argument("--include-active", nargs='+', help="List of keywords that MUST be in active ingredients.")
@@ -594,7 +594,7 @@ def main():
     # --- search-spls command ---
     spl_parser = subparsers.add_parser("search-spls", help="Search for SPLs (drug labels).")
     spl_parser.add_argument("--page", type=int, default=1, help="Page number of results.")
-    spl_parser.add_argument("--pagesize", type=int, default=5, help="Results per page (max 100).")
+    spl_parser.add_argument("--pagesize", type=int, default=25, help="Results per page (max 100).")
     spl_parser.add_argument("--application_number", type=str, help="Filter by NDA number.")
     
     # Correct way to handle boolean flags in argparse
