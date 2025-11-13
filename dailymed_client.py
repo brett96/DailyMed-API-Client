@@ -5,6 +5,42 @@ import sys
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, Optional, Union, List, Set, Generator
 
+def print_pagination_info(args: argparse.Namespace, metadata: Dict[str, Any]):
+    """
+    Checks API response metadata and prints a 'next page' command if applicable.
+    """
+    try:
+        current_page = int(metadata.get("current_page", 1))
+        total_pages = int(metadata.get("total_pages", 0))
+
+        if current_page < total_pages:
+            next_page = current_page + 1
+            
+            # Reconstruct the command from sys.argv
+            command_args = sys.argv[1:] # Get all args: ['search-spls', '--drug_name', 'ibuprofen']
+            page_found = False
+
+            for i, arg in enumerate(command_args):
+                if arg == "--page":
+                    if i + 1 < len(command_args):
+                        command_args[i+1] = str(next_page) # Update page number
+                        page_found = True
+                    break
+            
+            if not page_found:
+                # Insert --page {next_page} right after the command
+                command_args.insert(3, "--page")
+                command_args.insert(4, str(next_page))
+            
+            print("\n" + ("-" * 20))
+            print(f"More results available (Page {current_page} of {total_pages}).")
+            print("To get the next page, run:")
+            print(f"  python {sys.argv[0]} {' '.join(command_args)}")
+    except Exception as e:
+        # Fail silently if metadata is malformed
+        print(f"[Warning] Could not parse pagination: {e}", file=sys.stderr)
+
+
 class DailyMedAPI:
     """
     A Python client for interacting with the DailyMed RESTful API (v2).
@@ -430,37 +466,47 @@ class DailyMedAPI:
 
     def search_with_filters(
         self,
-        drug_name: str,
-        pagesize: int = 25,
-        route: Optional[str] = None,
-        only_active: Optional[List[str]] = None,
-        include_active: Optional[List[str]] = None,
-        exclude_active: Optional[List[str]] = None,
-        include_inactive: Optional[List[str]] = None,
-        exclude_inactive: Optional[List[str]] = None
+        args: argparse.Namespace
     ) -> Generator[Dict[str, Any], None, None]:
         """
         Performs a basic search, then applies advanced filters by fetching each SPL.
         This is a multi-step process and may be slow.
         """
-        print(f"Starting advanced search for '{drug_name}' (processing up to {pagesize} results)...")
+        # Extract arguments from the args object
+        drug_name = args.drug_name
+        pagesize = args.pagesize
+        page = args.page
+        route = args.route
+        form = args.form # NEW
+        only_active = args.only_active
+        include_active = args.include_active
+        exclude_active = args.exclude_active
+        include_inactive = args.include_inactive
+        exclude_inactive = args.exclude_inactive
+
+        print(f"Starting advanced search for '{drug_name}' (Page {page}, processing up to {pagesize} results)...")
         print("This may take a moment as each result is fetched and parsed.")
 
         # 1. Initial search
+        metadata = None
         try:
-            initial_results = self.search_spls(drug_name=drug_name, pagesize=pagesize)
+            initial_results = self.search_spls(drug_name=drug_name, pagesize=pagesize, page=page)
+            metadata = initial_results.get("metadata") # Get metadata for pagination
         except requests.exceptions.RequestException as e:
             print(f"Initial API search failed: {e}", file=sys.stderr)
-            return
+            yield # Stop generation
+            return # Exit function
 
         data_results = initial_results.get("data")
         
         if not data_results:
             print("No initial results found.")
-            return
+            yield # Stop generation
+            return # Exit function
 
         # 2. Prepare filter keywords (convert to lowercase sets for comparison)
         route_filter = route.lower() if route else None
+        form_filter = {k.lower() for k in form} if form else set() # NEW
         only_act_filts = {k.lower() for k in only_active} if only_active else set()
         inc_act = {k.lower() for k in include_active} if include_active else set()
         exc_act = {k.lower() for k in exclude_active} if exclude_active else set()
@@ -475,8 +521,6 @@ class DailyMedAPI:
             set_id = item.get("setid") 
             
             if not set_id:
-                # This should no longer happen, but good to keep
-                # print(f"  ... skipping result {i+1}/{len(data_results)} (No SET ID)")
                 continue
             
             try:
@@ -493,6 +537,12 @@ class DailyMedAPI:
                 # Check Route
                 parsed_route = parsed_data["route_code_display"].lower()
                 if route_filter and route_filter not in parsed_route:
+                    continue
+
+                # Check Form (NEW)
+                # We check if *any* of the filter keywords are in the form string
+                parsed_form = parsed_data["form_code_display"].lower()
+                if form_filter and not any(filt in parsed_form for filt in form_filter):
                     continue
 
                 # Prepare lowercase ingredient lists from parsed data
@@ -517,7 +567,7 @@ class DailyMedAPI:
                 if exc_inact and any(any(filt in inactive for inactive in inactive_list_lower) for filt in exc_inact):
                     continue
                 
-                # Check Only Active (NEW)
+                # Check Only Active
                 # Ensures ALL active ingredients found match at least ONE of the provided keywords
                 if only_act_filts and not all(any(filt in ing for filt in only_act_filts) for ing in active_list_lower):
                     continue # Skip, as it contains an "un-approved" active ingredient
@@ -531,6 +581,10 @@ class DailyMedAPI:
                 continue
         
         print(f"\nAdvanced search complete. Found {count} matching items.")
+        
+        # Now print pagination info if available
+        if metadata:
+            print_pagination_info(args, metadata)
 
 
 def pretty_print_json(data: Dict[str, Any]):
@@ -581,10 +635,12 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True, help="The API command to run")
 
     # --- NEW: search command ---
-    search_parser = subparsers.add_parser("search", help="Advanced search with post-filtering (slow).")
+    search_parser = subparsers.add_parser("search", help="Advanced search with post-filtering (slow, supports pagination).")
     search_parser.add_argument("--drug_name", type=str, required=True, help="Base drug name to search for (e.g., 'tylenol').")
+    search_parser.add_argument("--page", type=int, default=1, help="Page number of results.")
     search_parser.add_argument("--pagesize", type=int, default=25, help="Number of initial results to fetch and filter (max 100).")
     search_parser.add_argument("--route", type=str, help="Filter by route of administration (e.g., 'ORAL').")
+    search_parser.add_argument("--form", nargs='+', help="Filter by dosage form (e.g., 'TABLET', 'CAPSULE').")
     search_parser.add_argument("--only-active", nargs='+', help="Ensure *only* active ingredients matching these keywords are present.")
     search_parser.add_argument("--include-active", nargs='+', help="List of keywords that MUST be in active ingredients.")
     search_parser.add_argument("--exclude-active", nargs='+', help="List of keywords that MUST NOT be in active ingredients.")
@@ -701,16 +757,8 @@ def main():
         # Handle new 'search' command (looping)
         elif args.command == "search":
             results_found = 0
-            for result in api.search_with_filters(
-                drug_name=args.drug_name,
-                pagesize=args.pagesize,
-                route=args.route,
-                only_active=args.only_active,
-                include_active=args.include_active,
-                exclude_active=args.exclude_active,
-                include_inactive=args.include_inactive,
-                exclude_inactive=args.exclude_inactive
-            ):
+            # search_with_filters will now print its own pagination
+            for result in api.search_with_filters(args):
                 results_found += 1
                 print_search_result(result)
             
@@ -804,6 +852,8 @@ def main():
             if result:
                 print("API Response:")
                 pretty_print_json(result)
+                if isinstance(result, dict) and "metadata" in result:
+                    print_pagination_info(args, result["metadata"])
 
     except (requests.exceptions.RequestException, json.JSONDecodeError, ET.ParseError) as e:
         print(f"\nAn error occurred: {e}", file=sys.stderr)
