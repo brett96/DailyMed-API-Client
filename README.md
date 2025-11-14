@@ -6,8 +6,8 @@ A command-line Python script that interacts with the official DailyMed v2 RESTfu
 
 ## Table of Contents
 
-- [Features](#features)
 - [Requirements](#requirements)
+- [Features](#features)
 - [Installation](#installation)
 - [Usage](#usage)
   - [Help](#getting-help)
@@ -18,20 +18,32 @@ A command-line Python script that interacts with the official DailyMed v2 RESTfu
 
 ## Requirements
 
-- Python 3.10+ (compatible with Python 3.13.5)
+- Python 3.10+
 - Windows, macOS, or Linux
 - `requests` library
 
 ## Features
 
 **Advanced Search**
-- Basic & Advanced multi-step search with post-filtering (route, include/exclude active/inactive ingredients)
+- Basic & Advanced multi-step search with post-filtering:
+   - Route of Administration (e.g., "Oral")
+   - Dosage Form (e.g., "Tablet")
+   - Active ingredients to include or exclude
+   - Products containing only specific active ingredients
+   - Inactive ingredients to include or exclude
+
+- Search Pagination: Index and specify size of results
+   - Specify which page of results to retrieve (set by --page) 
+   - Specify the desired number of items per page (set by --pagesize)
+
 - Retrieve specific SPL documents by SET ID
+
 
 **SPL Information Access**
 - Version History
 - Associated NDCs
 - Packaging Information
+
 
 **Resource Management**
 - Drug Names (filter by manufacturer, name type)
@@ -40,10 +52,12 @@ A command-line Python script that interacts with the official DailyMed v2 RESTfu
 - Unique Ingredient Identifiers (UNIIs)
 - RxNorm Concept Unique Identifiers (RxCUIs)
 
+
 **Technical Features**
 - Simple, self-contained script
 - Only requires `requests` library
 - Built-in error handling for network and API issues
+
 
 
 ## Installation
@@ -167,8 +181,20 @@ python dailymed_client.py search-spls --help
    python dailymed_client.py search-spls --unii_code "362O9ITL9D"
    ```
 
-10. **Search RxCUI codes**
+#### 10. **Search RxCUI codes**
    ```bash
    # Find RxCUI codes for "aspirin" ('Prescribable Name' only)
    python dailymed_client.py get-rxcuis --rxstring "aspirin" --rxtty "PSN"
+   ```
+
+#### 11. **Search for single-ingredient products or products that only contain specified ingredients**
+   ```bash
+   # Find Benadryl products that only contain "Diphenhydramine" (and no other active ingredients)
+   python dailymed_client.py search --drug_name "benadryl" --only-active "diphenhydramine"
+   ```
+
+#### 12. **Filter by Drug Form**
+   ```bash
+   # Find "ibuprofen" products that are in tablet or capsule form and are taken orally
+   python dailymed_client.py search --drug_name "ibuprofen" --route "ORAL" --form "TABLET" "CAPSULE"
    ```
